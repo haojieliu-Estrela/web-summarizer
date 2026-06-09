@@ -1104,6 +1104,33 @@ def classify_content():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/obsidian/rebuild", methods=["POST"])
+def rebuild_indexes():
+    """重建所有索引页（分类索引、标签索引、总览）"""
+    if not OBSIDIAN_ENABLED:
+        return jsonify({"error": "Obsidian 集成未启用"}), 500
+    try:
+        result = obsidian.rebuild_all_indexes()
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/obsidian/related", methods=["POST"])
+def get_related():
+    """获取关联笔记"""
+    if not OBSIDIAN_ENABLED:
+        return jsonify({"error": "Obsidian 集成未启用"}), 500
+    data = request.get_json(silent=True) or {}
+    tags = data.get("tags", [])
+    category = data.get("category", "other")
+    try:
+        related = obsidian._find_related_notes(tags, category)
+        return jsonify({"success": True, "related": related})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     print_startup_info()
     if OBSIDIAN_ENABLED:

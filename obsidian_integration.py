@@ -116,8 +116,55 @@ class ObsidianIntegration:
 
         return key_points[:5]
 
+    def _find_related_notes(self, tags, category, current_file=None):
+        """基于标签和分类查找关联笔记"""
+        related = []
+        for cat in self.CATEGORIES.keys():
+            cat_path = self.summaries_path / cat
+            if not cat_path.exists():
+                continue
+            for md_file in cat_path.glob("*.md"):
+                if current_file and md_file.name == current_file:
+                    continue
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                    if not content.startswith("---"):
+                        continue
+                    end_idx = content.index("---", 3)
+                    frontmatter = content[3:end_idx]
+
+                    title_match = re.search(r'title:\s*"(.+?)"', frontmatter)
+                    file_tags_match = re.search(r'tags:\s*\[(.+?)\]', frontmatter)
+                    if not title_match:
+                        continue
+
+                    file_title = title_match.group(1)
+                    file_tags = []
+                    if file_tags_match:
+                        file_tags = [t.strip().strip('"') for t in file_tags_match.group(1).split(",")]
+
+                    # 计算关联分数：共享标签 + 同分类
+                    score = len(set(tags) & set(file_tags)) * 2
+                    if cat == category:
+                        score += 1
+
+                    if score > 0:
+                        related.append({
+                            "title": file_title,
+                            "file": md_file.stem,
+                            "category": cat,
+                            "score": score,
+                            "shared_tags": list(set(tags) & set(file_tags))
+                        })
+                except Exception:
+                    continue
+
+        # 按关联分数排序，取前 5 个
+        related.sort(key=lambda x: x["score"], reverse=True)
+        return related[:5]
+
     def generate_markdown(self, title, url, summary, model="unknown", extra_tags=None):
-        """生成 Obsidian Markdown 文件"""
+        """生成 Obsidian Markdown 文件（带 wikilinks 关联）"""
         now = datetime.now()
         date_str = now.strftime("%Y-%m-%d")
         time_str = now.strftime("%H:%M:%S")
@@ -129,20 +176,35 @@ class ObsidianIntegration:
         tags = self.extract_tags(title, summary, url)
         if extra_tags:
             tags.extend(extra_tags)
-        tags = list(set(tags))[:8]  # 去重并限制数量
+        tags = list(set(tags))[:8]
 
         # 提取关键要点
         key_points = self.extract_key_points(summary)
         key_points_text = "\n- ".join(key_points) if key_points else "待提取"
 
-        # 生成文件名（去除特殊字符）
+        # 生成文件名
         safe_title = re.sub(r'[<>:"/\\|?*]', '', title)[:50]
         filename = f"{date_str}-{safe_title}.md"
+
+        # 查找关联笔记
+        related = self._find_related_notes(tags, category, filename)
+        related_links = ""
+        if related:
+            for r in related:
+                shared = ", ".join(r["shared_tags"]) if r["shared_tags"] else r["category"]
+                related_links += f"- [[{r['file']}|{r['title']}]] _({shared})_\n"
+        else:
+            related_links = "- _暂无关联笔记，添加更多摘要后自动生成_\n"
+
+        # 标签 wikilinks
+        tag_links = ", ".join([f'[[#{tag}|{tag}]]' for tag in tags])
+
+        # 分类索引链接
+        category_link = f"[[{category}-index|{category}]]"
 
         # 生成标签字符串
         tags_str = ", ".join([f'"{tag}"' for tag in tags])
 
-        # 生成 Markdown 内容
         markdown = f"""---
 title: "{title}"
 url: "{url}"
@@ -166,8 +228,8 @@ rating: 0
 | 📅 日期 | {date_str} |
 | ⏰ 时间 | {time_str} |
 | 🤖 模型 | {model} |
-| 📂 分类 | {category} |
-| 🏷️ 标签 | {', '.join(tags)} |
+| 📂 分类 | {category_link} |
+| 🏷️ 标签 | {tag_links} |
 
 ---
 
@@ -188,12 +250,11 @@ rating: 0
 > 在这里添加你的想法和笔记...
 
 
-
 ---
 
-## 🔗 相关链接
+## 🔗 关联笔记
 
-- 
+{related_links}
 
 ---
 
@@ -213,22 +274,297 @@ WHERE file.name = this.file.name
             "filename": filename,
             "category": category,
             "tags": tags,
+            "related": [r["file"] for r in related],
             "markdown": markdown
         }
 
     def save_summary(self, title, url, summary, model="unknown", extra_tags=None):
-        """保存摘要到 Obsidian Vault"""
+        """保存摘要到 Obsidian Vault，并更新索引页"""
         result = self.generate_markdown(title, url, summary, model, extra_tags)
 
         # 保存文件
         file_path = self.summaries_path / result["category"] / result["filename"]
         file_path.write_text(result["markdown"], encoding="utf-8")
 
+        # 更新分类索引和标签索引
+        self._update_category_index(result["category"])
+        for tag in result["tags"]:
+            self._update_tag_index(tag)
+        self._update_overview()
+
         return {
             "path": str(file_path),
             "category": result["category"],
             "tags": result["tags"],
-            "filename": result["filename"]
+            "filename": result["filename"],
+            "related": result.get("related", [])
+        }
+
+    def _get_all_notes(self):
+        """获取所有摘要笔记的元数据"""
+        notes = []
+        for category in self.CATEGORIES.keys():
+            cat_path = self.summaries_path / category
+            if not cat_path.exists():
+                continue
+            for md_file in cat_path.glob("*.md"):
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                    if not content.startswith("---"):
+                        continue
+                    end_idx = content.index("---", 3)
+                    frontmatter = content[3:end_idx]
+
+                    title_match = re.search(r'title:\s*"(.+?)"', frontmatter)
+                    date_match = re.search(r'date:\s*"(.+?)"', frontmatter)
+                    tags_match = re.search(r'tags:\s*\[(.+?)\]', frontmatter)
+                    model_match = re.search(r'model:\s*"(.+?)"', frontmatter)
+                    status_match = re.search(r'status:\s*"(.+?)"', frontmatter)
+                    rating_match = re.search(r'rating:\s*(\d+)', frontmatter)
+
+                    if not title_match:
+                        continue
+
+                    file_tags = []
+                    if tags_match:
+                        file_tags = [t.strip().strip('"') for t in tags_match.group(1).split(",")]
+
+                    notes.append({
+                        "title": title_match.group(1),
+                        "file": md_file.stem,
+                        "category": category,
+                        "date": date_match.group(1) if date_match else "",
+                        "tags": file_tags,
+                        "model": model_match.group(1) if model_match else "",
+                        "status": status_match.group(1) if status_match else "unread",
+                        "rating": int(rating_match.group(1)) if rating_match else 0,
+                    })
+                except Exception:
+                    continue
+        return notes
+
+    def _update_category_index(self, category):
+        """更新分类索引页"""
+        notes = self._get_all_notes()
+        cat_notes = [n for n in notes if n["category"] == category]
+        cat_notes.sort(key=lambda x: x["date"], reverse=True)
+
+        cat_names = {
+            "tech": "💻 技术", "ai": "🤖 AI/ML", "devops": "🔧 运维",
+            "news": "📰 新闻", "academic": "📚 学术", "other": "📦 其他"
+        }
+        cat_name = cat_names.get(category, category)
+
+        links = []
+        for n in cat_notes:
+            rating_stars = "⭐" * n["rating"] if n["rating"] > 0 else "—"
+            status_icon = "✅" if n["status"] == "read" else "📖"
+            tag_str = " ".join([f'`{t}`' for t in n["tags"][:3]])
+            links.append(f"| [[{n['file']}|{n['title']}]] | {n['date']} | {tag_str} | {rating_stars} | {status_icon} |")
+
+        table = "\n".join(links) if links else "| _暂无笔记_ | — | — | — | — |"
+
+        content = f"""---
+title: "{cat_name} 索引"
+type: "index"
+category: "{category}"
+---
+
+# {cat_name}
+
+> 📂 共 {len(cat_notes)} 篇摘要 | [[📊 摘要总览|返回总览]]
+
+| 标题 | 日期 | 标签 | 评分 | 状态 |
+|------|------|------|------|------|
+{table}
+
+---
+
+```dataview
+TABLE WITHOUT ID
+  file.link as "文件",
+  date as "日期",
+  tags as "标签",
+  rating as "评分"
+FROM "Web Summaries/{category}"
+SORT date DESC
+```
+"""
+        index_path = self.summaries_path / f"{category}-index.md"
+        index_path.write_text(content, encoding="utf-8")
+
+    def _update_tag_index(self, tag):
+        """更新标签索引页"""
+        notes = self._get_all_notes()
+        tag_notes = [n for n in notes if tag in n["tags"]]
+        tag_notes.sort(key=lambda x: x["date"], reverse=True)
+
+        links = []
+        for n in tag_notes:
+            cat_link = f"[[{n['category']}-index|{n['category']}]]"
+            links.append(f"| [[{n['file']}|{n['title']}]] | {n['date']} | {cat_link} |")
+
+        table = "\n".join(links) if links else "| _暂无笔记_ | — | — |"
+
+        content = f"""---
+title: "🏷️ {tag}"
+type: "tag-index"
+tag: "{tag}"
+---
+
+# 🏷️ {tag}
+
+> 共 {len(tag_notes)} 篇相关摘要 | [[📊 摘要总览|返回总览]]
+
+| 标题 | 日期 | 分类 |
+|------|------|------|
+{table}
+"""
+        tag_dir = self.summaries_path / ".tags"
+        tag_dir.mkdir(exist_ok=True)
+        tag_path = tag_dir / f"{tag}.md"
+        tag_path.write_text(content, encoding="utf-8")
+
+    def _update_overview(self):
+        """更新总览页"""
+        notes = self._get_all_notes()
+        total = len(notes)
+
+        # 分类统计
+        cat_counts = {}
+        for n in notes:
+            cat_counts[n["category"]] = cat_counts.get(n["category"], 0) + 1
+
+        cat_rows = []
+        cat_names = {
+            "tech": "💻 技术", "ai": "🤖 AI/ML", "devops": "🔧 运维",
+            "news": "📰 新闻", "academic": "📚 学术", "other": "📦 其他"
+        }
+        for cat, count in sorted(cat_counts.items(), key=lambda x: -x[1]):
+            cat_rows.append(f"| [[{cat}-index|{cat_names.get(cat, cat)}]] | {count} |")
+
+        # 标签统计
+        tag_counts = {}
+        for n in notes:
+            for t in n["tags"]:
+                tag_counts[t] = tag_counts.get(t, 0) + 1
+
+        tag_rows = []
+        for tag, count in sorted(tag_counts.items(), key=lambda x: -x[1])[:10]:
+            tag_rows.append(f"| [[.tags/{tag}|{tag}]] | {count} |")
+
+        # 最近笔记
+        recent = sorted(notes, key=lambda x: x["date"], reverse=True)[:10]
+        recent_rows = []
+        for n in recent:
+            cat_link = f"[[{n['category']}-index|{n['category']}]]"
+            recent_rows.append(f"| [[{n['file']}|{n['title']}]] | {n['date']} | {cat_link} |")
+
+        cat_table = "\n".join(cat_rows) if cat_rows else "| _暂无_ | 0 |"
+        tag_table = "\n".join(tag_rows) if tag_rows else "| _暂无_ | 0 |"
+        recent_table = "\n".join(recent_rows) if recent_rows else "| _暂无_ | — | — |"
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        content = f"""---
+title: "📊 摘要总览"
+type: "overview"
+---
+
+# 📊 摘要总览
+
+> 共 **{total}** 篇摘要 | 最后更新: {now_str}
+
+---
+
+## 📂 分类导航
+
+| 分类 | 数量 |
+|------|------|
+{cat_table}
+
+---
+
+## 🏷️ 热门标签
+
+| 标签 | 关联数 |
+|------|--------|
+{tag_table}
+
+---
+
+## 📅 最近摘要
+
+| 标题 | 日期 | 分类 |
+|------|------|------|
+{recent_table}
+
+---
+
+## 🔍 高级查询
+
+```dataview
+TABLE WITHOUT ID
+  file.link as "文件",
+  date as "日期",
+  category as "分类",
+  tags as "标签",
+  rating as "评分",
+  status as "状态"
+FROM "Web Summaries"
+WHERE source = "web-summarizer"
+SORT date DESC
+LIMIT 20
+```
+
+### ⭐ 高评分
+
+```dataview
+TABLE WITHOUT ID
+  file.link as "文件",
+  rating as "评分",
+  category as "分类"
+FROM "Web Summaries"
+WHERE rating >= 4
+SORT rating DESC
+```
+
+### 📖 未读
+
+```dataview
+TABLE WITHOUT ID
+  file.link as "文件",
+  date as "日期",
+  category as "分类"
+FROM "Web Summaries"
+WHERE status = "unread"
+SORT date DESC
+```
+"""
+        overview_path = self.summaries_path / "📊 摘要总览.md"
+        overview_path.write_text(content, encoding="utf-8")
+
+    def rebuild_all_indexes(self):
+        """重建所有索引页"""
+        notes = self._get_all_notes()
+
+        # 更新所有分类索引
+        for category in self.CATEGORIES.keys():
+            self._update_category_index(category)
+
+        # 更新所有标签索引
+        all_tags = set()
+        for n in notes:
+            all_tags.update(n["tags"])
+        for tag in all_tags:
+            self._update_tag_index(tag)
+
+        # 更新总览
+        self._update_overview()
+
+        return {
+            "total_notes": len(notes),
+            "categories": len([c for c in self.CATEGORIES.keys() if (self.summaries_path / c).exists()]),
+            "tags": len(all_tags)
         }
 
     def generate_mindmap(self, days=30):
