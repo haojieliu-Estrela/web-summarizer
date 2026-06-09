@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>模型设置 - 网页摘要助手</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro SC", "PingFang SC", sans-serif;
+            background: #030308;
+            min-height: 100vh;
+            color: #e0e0e0;
+            overflow-x: hidden;
+        }
+
+        /* ── 粒子画布 ── */
+        #particleCanvas {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 1; pointer-events: none;
+        }
+
+        /* ── 网格背景 ── */
+        .grid-bg {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0;
+            background-image:
+                linear-gradient(rgba(99,102,241,0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(99,102,241,0.04) 1px, transparent 1px);
+            background-size: 60px 60px;
+            pointer-events: none;
+        }
+
+        /* ── 光晕 ── */
+        .glow-1 {
+            position: fixed; top: -200px; left: -200px;
+            width: 600px; height: 600px; border-radius: 50%;
+            background: radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 70%);
+            pointer-events: none; z-index: 0;
+            animation: float1 20s ease-in-out infinite;
+        }
+        .glow-2 {
+            position: fixed; bottom: -300px; right: -200px;
+            width: 700px; height: 700px; border-radius: 50%;
+            background: radial-gradient(circle, rgba(139,92,246,0.10) 0%, transparent 70%);
+            pointer-events: none; z-index: 0;
+            animation: float2 25s ease-in-out infinite;
+        }
+        @keyframes float1 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(80px,60px); } }
+        @keyframes float2 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(-60px,-80px); } }
+
+        /* ── 主容器 ── */
+        .main { position: relative; z-index: 10; }
+
+        /* ── 导航栏 ── */
+        .navbar {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+            padding: 16px 32px; display: flex; align-items: center; justify-content: space-between;
+            background: rgba(5,5,8,0.8); backdrop-filter: blur(24px);
+            border-bottom: 1px solid rgba(99,102,241,0.1);
+        }
+        .nav-brand {
+            font-size: 1.05rem; font-weight: 700; color: #fff;
+            display: flex; align-items: center; gap: 10px;
+            text-decoration: none;
+        }
+        .nav-icon {
+            width: 30px; height: 30px; border-radius: 8px;
+            background: linear-gradient(135deg, #6366f1, #a78bfa);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 15px; box-shadow: 0 0 20px rgba(99,102,241,0.4);
+        }
+        .nav-links {
+            display: flex; gap: 20px;
+        }
+        .nav-link {
+            color: #44445a; text-decoration: none; font-size: 0.85rem;
+            transition: all 0.3s;
+        }
+        .nav-link:hover, .nav-link.active { color: #818cf8; }
+
+        /* ── 内容区 ── */
+        .content {
+            max-width: 800px; margin: 0 auto; padding: 120px 20px 80px;
+        }
+
+        .page-title {
+            text-align: center; margin-bottom: 50px;
+        }
+        .page-title h1 {
+            font-size: 2rem; font-weight: 800;
+            background: linear-gradient(135deg, #818cf8 0%, #c084fc 50%, #f472b6 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            margin-bottom: 12px;
+        }
+        .page-title p {
+            color: #3a3a50; font-size: 0.95rem;
+        }
+
+        /* ── 当前模型卡片 ── */
+        .current-model {
+            background: rgba(10,10,18,0.9); border: 1px solid rgba(99,102,241,0.2);
+            border-radius: 20px; padding: 30px; margin-bottom: 40px;
+            backdrop-filter: blur(12px);
+            position: relative; overflow: hidden;
+        }
+        .current-model::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+            background: linear-gradient(90deg, #6366f1, #a78bfa, #c084fc);
+        }
+        .current-model-header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .current-model-title {
+            font-size: 0.85rem; color: #818cf8; font-weight: 600;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .current-model-badge {
+            padding: 4px 12px; border-radius: 20px; font-size: 0.72rem;
+            background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3);
+        }
+        .current-model-info {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+        }
+        .info-item {
+            background: rgba(12,12,20,0.85); border: 1px solid #151520;
+            border-radius: 12px; padding: 16px;
+        }
+        .info-label {
+            font-size: 0.72rem; color: #3a3a50; margin-bottom: 6px;
+        }
+        .info-value {
+            font-size: 0.88rem; color: #b0b0d0; font-weight: 600;
+        }
+
+        /* ── 模型列表 ── */
+        .section-title {
+            font-size: 1.1rem; font-weight: 700; color: #b0b0d0; margin-bottom: 20px;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .section-title span {
+            font-size: 0.75rem; color: #3a3a50; font-weight: 400;
+        }
+
+        .models-grid {
+            display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;
+            margin-bottom: 40px;
+        }
+
+        .model-card {
+            background: rgba(10,10,18,0.9); border: 1px solid #151520;
+            border-radius: 16px; padding: 24px; cursor: pointer;
+            transition: all 0.35s; position: relative; overflow: hidden;
+        }
+        .model-card:hover {
+            border-color: rgba(99,102,241,0.3); transform: translateY(-3px);
+            box-shadow: 0 8px 32px rgba(99,102,241,0.1);
+        }
+        .model-card.active {
+            border-color: #6366f1; background: rgba(99,102,241,0.05);
+        }
+        .model-card.active::after {
+            content: '✓'; position: absolute; top: 12px; right: 12px;
+            width: 24px; height: 24px; border-radius: 50%;
+            background: #6366f1; color: #fff;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 12px;
+        }
+        .model-card-header {
+            display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
+        }
+        .model-icon {
+            width: 40px; height: 40px; border-radius: 10px;
+            background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.15);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px;
+        }
+        .model-name {
+            font-size: 0.92rem; font-weight: 700; color: #e0e0f0;
+        }
+        .model-provider {
+            font-size: 0.72rem; color: #3a3a50;
+        }
+        .model-detail {
+            font-size: 0.78rem; color: #44445a; line-height: 1.6;
+        }
+        .model-status {
+            margin-top: 12px; display: flex; align-items: center; gap: 8px;
+        }
+        .status-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+        }
+        .status-dot.available { background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,0.5); }
+        .status-dot.missing-key { background: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,0.5); }
+        .status-text {
+            font-size: 0.72rem; color: #3a3a50;
+        }
+
+        /* ── 测试区域 ── */
+        .test-section {
+            background: rgba(10,10,18,0.9); border: 1px solid #151520;
+            border-radius: 20px; padding: 30px; margin-bottom: 40px;
+        }
+        .test-header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .test-title {
+            font-size: 0.88rem; font-weight: 600; color: #818cf8;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .test-btn {
+            padding: 10px 24px; border: none; border-radius: 12px;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: #fff; font-size: 0.85rem; font-weight: 600;
+            cursor: pointer; transition: all 0.25s;
+            box-shadow: 0 0 20px rgba(99,102,241,0.3);
+        }
+        .test-btn:hover:not(:disabled) {
+            box-shadow: 0 0 32px rgba(99,102,241,0.5);
+            transform: translateY(-1px);
+        }
+        .test-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .test-result {
+            background: rgba(12,12,20,0.85); border: 1px solid #151520;
+            border-radius: 12px; padding: 20px; font-size: 0.85rem;
+            color: #a0a0c0; line-height: 1.8; min-height: 60px;
+            display: none;
+        }
+        .test-result.show { display: block; animation: fadeUp 0.3s ease; }
+        .test-result.success { border-color: rgba(34,197,94,0.3); }
+        .test-result.error { border-color: rgba(239,68,68,0.3); color: #f87171; }
+
+        /* ── 环境变量提示 ── */
+        .env-hint {
+            background: rgba(99,102,241,0.05); border: 1px solid rgba(99,102,241,0.15);
+            border-radius: 16px; padding: 24px; margin-bottom: 40px;
+        }
+        .env-hint-title {
+            font-size: 0.88rem; font-weight: 600; color: #818cf8; margin-bottom: 16px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .env-hint-content {
+            background: rgba(0,0,0,0.3); border-radius: 10px; padding: 16px;
+            font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.82rem;
+            color: #a0a0c0; line-height: 1.8; overflow-x: auto;
+        }
+        .env-hint-content .comment { color: #3a3a50; }
+        .env-hint-content .key { color: #818cf8; }
+        .env-hint-content .value { color: #22c55e; }
+
+        /* ── 提示消息 ── */
+        .toast {
+            position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+            padding: 14px 28px; border-radius: 12px;
+            background: rgba(10,10,18,0.95); border: 1px solid rgba(99,102,241,0.3);
+            color: #e0e0f0; font-size: 0.85rem;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            z-index: 1000; opacity: 0; pointer-events: none;
+            transition: all 0.3s;
+        }
+        .toast.show { opacity: 1; pointer-events: auto; }
+        .toast.success { border-color: rgba(34,197,94,0.5); }
+        .toast.error { border-color: rgba(239,68,68,0.5); }
+
+        /* ── 底部 ── */
+        .footer {
+            text-align: center; padding: 36px 20px;
+            font-size: 0.72rem; color: #1a1a26;
+            border-top: 1px solid #0a0a10;
+        }
+
+        /* ── 扫描线效果 ── */
+        .scanline {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(99,102,241,0.01) 2px,
+                rgba(99,102,241,0.01) 4px
+            );
+        }
+
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+
+        @media (max-width: 600px) {
+            .models-grid { grid-template-columns: 1fr; }
+            .current-model-info { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <!-- 粒子画布 -->
+    <canvas id="particleCanvas"></canvas>
+
+    <!-- 背景元素 -->
+    <div class="grid-bg"></div>
+    <div class="glow-1"></div>
+    <div class="glow-2"></div>
+    <div class="scanline"></div>
+
+    <div class="main">
+        <nav class="navbar">
+            <a href="/" class="nav-brand">
+                <div class="nav-icon">⚡</div>
+                网页摘要助手
+            </a>
+            <div class="nav-links">
+                <a href="/" class="nav-link">首页</a>
+                <a href="/settings" class="nav-link active">模型设置</a>
+            </div>
+        </nav>
+
+        <div class="content">
+            <div class="page-title">
+                <h1>🤖 模型设置</h1>
+                <p>选择和配置你的 AI 模型</p>
+            </div>
+
+            <!-- 当前模型 -->
+            <div class="current-model">
+                <div class="current-model-header">
+                    <div class="current-model-title">
+                        <span>📍</span> 当前使用模型
+                    </div>
+                    <div class="current-model-badge" id="currentStatus">运行中</div>
+                </div>
+                <div class="current-model-info">
+                    <div class="info-item">
+                        <div class="info-label">模型名称</div>
+                        <div class="info-value" id="currentName">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">提供商</div>
+                        <div class="info-value" id="currentProvider">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">模型标识</div>
+                        <div class="info-value" id="currentModelId">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 模型列表 -->
+            <div class="section-title">
+                🎯 可用模型 <span>点击切换</span>
+            </div>
+            <div class="models-grid" id="modelsGrid">
+                <!-- 动态填充 -->
+            </div>
+
+            <!-- 测试区域 -->
+            <div class="test-section">
+                <div class="test-header">
+                    <div class="test-title">
+                        <span>🧪</span> 连接测试
+                    </div>
+                    <button class="test-btn" id="testBtn" onclick="testModel()">测试连接</button>
+                </div>
+                <div class="test-result" id="testResult"></div>
+            </div>
+
+            <!-- 环境变量提示 -->
+            <div class="env-hint">
+                <div class="env-hint-title">
+                    <span>📝</span> 环境变量配置
+                </div>
+                <div class="env-hint-content">
+                    <span class="comment"># 在项目根目录创建 .env 文件</span><br><br>
+                    <span class="comment"># 小米 MiMo</span><br>
+                    <span class="key">MIMO_API_KEY</span>=<span class="value">sk-your-mimo-key</span><br><br>
+                    <span class="comment"># DeepSeek</span><br>
+                    <span class="key">DEEPSEEK_API_KEY</span>=<span class="value">sk-your-deepseek-key</span><br><br>
+                    <span class="comment"># OpenAI</span><br>
+                    <span class="key">OPENAI_API_KEY</span>=<span class="value">sk-your-openai-key</span><br><br>
+                    <span class="comment"># 通义千问</span><br>
+                    <span class="key">QWEN_API_KEY</span>=<span class="value">sk-your-qwen-key</span><br><br>
+                    <span class="comment"># 默认模型 (可选)</span><br>
+                    <span class="key">DEFAULT_MODEL</span>=<span class="value">mimo</span>
+                </div>
+            </div>
+        </div>
+
+        <footer class="footer">网页摘要助手 · 支持多模型切换</footer>
+    </div>
+
+    <!-- 提示消息 -->
+    <div class="toast" id="toast"></div>
+
+<script>
+// ════════ 粒子系统 ═══════
+const canvas = document.getElementById('particleCanvas');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+const mouse = { x: null, y: null, radius: 150 };
+document.addEventListener('mousemove', (e) => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+});
+
+class Particle {
+    constructor() {
+        this.reset();
+    }
+    reset() {
+        this.x = Math.random() * W;
+        this.y = Math.random() * H;
+        this.size = Math.random() * 2 + 0.5;
+        this.speedX = (Math.random() - 0.5) * 0.5;
+        this.speedY = (Math.random() - 0.5) * 0.5;
+        this.opacity = Math.random() * 0.5 + 0.1;
+    }
+    update() {
+        this.x += this.speedX;
+        this.y += this.speedY;
+
+        if (mouse.x !== null) {
+            const dx = mouse.x - this.x;
+            const dy = mouse.y - this.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < mouse.radius) {
+                const force = (mouse.radius - dist) / mouse.radius;
+                this.x -= dx * force * 0.02;
+                this.y -= dy * force * 0.02;
+            }
+        }
+
+        if (this.x < 0 || this.x > W || this.y < 0 || this.y > H) this.reset();
+    }
+    draw() {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(129, 140, 248, ${this.opacity})`;
+        ctx.fill();
+    }
+}
+
+const particles = Array.from({ length: 80 }, () => new Particle());
+
+function animate() {
+    ctx.clearRect(0, 0, W, H);
+    particles.forEach(p => { p.update(); p.draw(); });
+    requestAnimationFrame(animate);
+}
+animate();
+
+// ════════ 模型管理 ═══════
+
+const modelIcons = {
+    'mimo': '🤖',
+    'deepseek': '🐋',
+    'openai': '✨',
+    'qwen': '☁️',
+    'ollama': '🦙'
+};
+
+let currentModelKey = '';
+
+async function loadModels() {
+    try {
+        const resp = await fetch('/api/models');
+        const data = await resp.json();
+
+        currentModelKey = data.current;
+
+        // 更新当前模型信息
+        const current = data.models.find(m => m.is_current);
+        if (current) {
+            document.getElementById('currentName').textContent = current.name;
+            document.getElementById('currentProvider').textContent = current.provider;
+            document.getElementById('currentModelId').textContent = current.model;
+        }
+
+        // 渲染模型列表
+        const grid = document.getElementById('modelsGrid');
+        grid.innerHTML = data.models.map(model => `
+            <div class="model-card ${model.is_current ? 'active' : ''}"
+                 onclick="switchModel('${model.key}')"
+                 data-key="${model.key}">
+                <div class="model-card-header">
+                    <div class="model-icon">${modelIcons[model.key] || '🔮'}</div>
+                    <div>
+                        <div class="model-name">${model.name}</div>
+                        <div class="model-provider">${model.provider}</div>
+                    </div>
+                </div>
+                <div class="model-detail">模型: ${model.model}</div>
+                <div class="model-status">
+                    <div class="status-dot ${model.has_api_key ? 'available' : 'missing-key'}"></div>
+                    <div class="status-text">${model.has_api_key ? 'API Key 已配置' : '需要配置 API Key'}</div>
+                </div>
+            </div>
+        `).join('');
+
+    } catch (err) {
+        showToast('加载模型列表失败', 'error');
+    }
+}
+
+async function switchModel(key) {
+    if (key === currentModelKey) return;
+
+    try {
+        const resp = await fetch('/api/models/switch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model_key: key })
+        });
+
+        const data = await resp.json();
+
+        if (resp.ok) {
+            showToast(data.message, 'success');
+            currentModelKey = key;
+            await loadModels();
+        } else {
+            showToast(data.error, 'error');
+        }
+    } catch (err) {
+        showToast('切换失败: ' + err.message, 'error');
+    }
+}
+
+async function testModel() {
+    const btn = document.getElementById('testBtn');
+    const result = document.getElementById('testResult');
+
+    btn.disabled = true;
+    btn.textContent = '测试中...';
+    result.className = 'test-result show';
+    result.textContent = '正在测试模型连接...';
+
+    try {
+        const resp = await fetch('/api/models/test', { method: 'POST' });
+        const data = await resp.json();
+
+        if (data.success) {
+            result.className = 'test-result show success';
+            result.innerHTML = `✅ 连接成功<br><br>模型: ${data.model}<br>回复: ${data.response}`;
+        } else {
+            result.className = 'test-result show error';
+            result.innerHTML = `❌ 连接失败<br><br>${data.error}`;
+        }
+    } catch (err) {
+        result.className = 'test-result show error';
+        result.innerHTML = `❌ 请求失败<br><br>${err.message}`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '测试连接';
+    }
+}
+
+function showToast(message, type = 'success') {
+    const toast = document.getElementById('toast');
+    toast.textContent = message;
+    toast.className = `toast show ${type}`;
+    setTimeout(() => { toast.className = 'toast'; }, 3000);
+}
+
+// 初始化
+loadModels();
+</script>
+</body>
+</html>

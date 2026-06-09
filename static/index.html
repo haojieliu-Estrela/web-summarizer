@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网页摘要助手</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro SC", "PingFang SC", sans-serif;
+            background: #030308;
+            min-height: 100vh;
+            color: #e0e0e0;
+            overflow-x: hidden;
+        }
+
+        /* ── 粒子画布 ── */
+        #particleCanvas {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 1; pointer-events: none;
+        }
+
+        /* ── 网格背景 ── */
+        .grid-bg {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0;
+            background-image:
+                linear-gradient(rgba(99,102,241,0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(99,102,241,0.04) 1px, transparent 1px);
+            background-size: 60px 60px;
+            pointer-events: none;
+        }
+
+        /* ── 光晕 ── */
+        .glow-1 {
+            position: fixed; top: -200px; left: -200px;
+            width: 600px; height: 600px; border-radius: 50%;
+            background: radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 70%);
+            pointer-events: none; z-index: 0;
+            animation: float1 20s ease-in-out infinite;
+        }
+        .glow-2 {
+            position: fixed; bottom: -300px; right: -200px;
+            width: 700px; height: 700px; border-radius: 50%;
+            background: radial-gradient(circle, rgba(139,92,246,0.10) 0%, transparent 70%);
+            pointer-events: none; z-index: 0;
+            animation: float2 25s ease-in-out infinite;
+        }
+        @keyframes float1 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(80px,60px); } }
+        @keyframes float2 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(-60px,-80px); } }
+
+        /* ── 主容器 ── */
+        .main { position: relative; z-index: 10; }
+
+        /* ── 导航栏 ── */
+        .navbar {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+            padding: 16px 32px; display: flex; align-items: center; justify-content: space-between;
+            background: rgba(5,5,8,0.8); backdrop-filter: blur(24px);
+            border-bottom: 1px solid rgba(99,102,241,0.1);
+        }
+        .nav-brand {
+            font-size: 1.05rem; font-weight: 700; color: #fff;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .nav-icon {
+            width: 30px; height: 30px; border-radius: 8px;
+            background: linear-gradient(135deg, #6366f1, #a78bfa);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 15px; box-shadow: 0 0 20px rgba(99,102,241,0.4);
+        }
+        .nav-status {
+            font-size: 0.76rem; color: #44445a;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .nav-status .dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,0.6);
+            animation: statusPulse 2s infinite;
+        }
+        @keyframes statusPulse {
+            0%,100% { box-shadow: 0 0 4px rgba(34,197,94,0.5); }
+            50% { box-shadow: 0 0 12px rgba(34,197,94,1); }
+        }
+
+        /* ── Hero ── */
+        .hero {
+            text-align: center; padding: 150px 20px 50px;
+            max-width: 700px; margin: 0 auto;
+        }
+        .hero-badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 7px 18px; border-radius: 24px;
+            background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.15);
+            font-size: 0.74rem; color: #818cf8; margin-bottom: 28px;
+            letter-spacing: 0.5px;
+        }
+        .hero-badge .pulse {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: #818cf8; animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0%,100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.8); }
+        }
+        .hero h1 {
+            font-size: 3.4rem; font-weight: 800; letter-spacing: -1.5px; line-height: 1.1;
+            margin-bottom: 20px;
+        }
+        .hero h1 .line1 {
+            background: linear-gradient(135deg, #e8e8f8 0%, #a0a0c8 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .hero h1 .line2 {
+            background: linear-gradient(135deg, #818cf8 0%, #c084fc 50%, #f472b6 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .hero p {
+            color: #3a3a50; font-size: 1rem; line-height: 1.7;
+            max-width: 440px; margin: 0 auto;
+        }
+
+        /* ── 搜索框 ── */
+        .search-section { 
+            max-width: 680px; 
+            margin: 0 auto; 
+            padding: 0 20px; 
+            position: relative; 
+            z-index: 20;  /* 高于粒子画布 */
+        }
+        .search-box { 
+            position: relative; 
+            margin-bottom: 20px; 
+        }
+        .search-box::before {
+            content: ''; position: absolute; inset: -1px;
+            border-radius: 20px; padding: 1px;
+            background: linear-gradient(135deg, rgba(99,102,241,0.4), rgba(168,85,247,0.15), rgba(99,102,241,0.4));
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor; mask-composite: exclude;
+            opacity: 0; transition: opacity 0.4s;
+        }
+        .search-box:focus-within::before { opacity: 1; }
+        .search-box input {
+            width: 100%; 
+            padding: 20px 155px 20px 24px;
+            border: 1px solid #151520; 
+            border-radius: 20px;
+            background: rgba(8,8,14,0.95); 
+            color: #fff; 
+            font-size: 0.95rem;
+            outline: none; 
+            transition: all 0.3s;
+            cursor: text;
+            position: relative;
+            z-index: 1;
+        }
+        .search-box input::placeholder { color: #2a2a3a; }
+        .search-box input:focus {
+            border-color: transparent;
+            box-shadow: 0 0 40px rgba(99,102,241,0.08);
+        }
+        .search-box button {
+            position: absolute; 
+            right: 8px; 
+            top: 8px; 
+            bottom: 8px;
+            padding: 0 30px; 
+            border: none; 
+            border-radius: 14px;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: #fff; 
+            font-size: 0.88rem; 
+            font-weight: 600;
+            cursor: pointer; 
+            transition: all 0.25s;
+            box-shadow: 0 0 24px rgba(99,102,241,0.3);
+            z-index: 2;
+        }
+        .search-box button:hover:not(:disabled) {
+            box-shadow: 0 0 36px rgba(99,102,241,0.5);
+            transform: translateY(-1px);
+        }
+        .search-box button:active:not(:disabled) { transform: scale(0.97); }
+        .search-box button:disabled { opacity: 0.3; cursor: not-allowed; box-shadow: none; }
+
+        /* ── 站点标签 ── */
+        .site-tags {
+            display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+            margin-bottom: 56px;
+        }
+        .site-tag {
+            padding: 8px 18px; border-radius: 12px;
+            background: rgba(10,10,18,0.85); border: 1px solid #151520;
+            font-size: 0.78rem; color: #44445a;
+            transition: all 0.3s; cursor: pointer;
+        }
+        .site-tag:hover { border-color: rgba(99,102,241,0.25); color: #818cf8; background: rgba(99,102,241,0.06); }
+        .site-tag .emoji { margin-right: 6px; }
+
+        /* ── 内容区 ── */
+        .content-area { max-width: 680px; margin: 0 auto; padding: 0 20px; }
+
+        .error-msg {
+            background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.15);
+            color: #f87171; padding: 14px 18px; border-radius: 14px;
+            font-size: 0.84rem; margin-bottom: 20px; display: none;
+        }
+        .error-msg.show { display: block; animation: fadeUp 0.25s ease; }
+
+        .progress-card {
+            background: rgba(10,10,18,0.9); border: 1px solid #151520;
+            border-radius: 20px; padding: 26px; margin-bottom: 20px;
+            display: none; backdrop-filter: blur(12px);
+        }
+        .progress-card.show { display: block; animation: fadeUp 0.3s ease; }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+
+        .progress-header {
+            display: flex; align-items: center; gap: 10px;
+            margin-bottom: 20px; font-size: 0.88rem; color: #8888a0;
+        }
+        .pulse-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #818cf8; animation: pulse 1.4s infinite;
+            box-shadow: 0 0 12px rgba(129,140,248,0.5);
+        }
+
+        .steps { display: flex; flex-direction: column; gap: 4px; }
+        .step {
+            display: flex; align-items: center; gap: 12px;
+            padding: 10px 16px; border-radius: 10px;
+            font-size: 0.82rem; color: #333345; transition: all 0.3s;
+        }
+        .step.active { background: rgba(99,102,241,0.05); color: #9898b0; }
+        .step.done { color: #818cf8; }
+        .step-num {
+            width: 22px; height: 22px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.62rem; border: 1px solid #1e1e2e; flex-shrink: 0;
+        }
+        .step.active .step-num { border-color: #6366f1; color: #818cf8; box-shadow: 0 0 10px rgba(99,102,241,0.25); }
+        .step.done .step-num { border-color: #6366f1; background: rgba(99,102,241,0.15); color: #818cf8; }
+        .step-time { margin-left: auto; font-size: 0.7rem; color: #2a2a3a; font-variant-numeric: tabular-nums; }
+
+        .progress-bar { height: 2px; background: #12121c; border-radius: 1px; margin-top: 16px; overflow: hidden; }
+        .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #6366f1, #a78bfa, #c084fc); transition: width 0.6s ease; }
+
+        .meta-tags { display: none; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+        .meta-tag { background: rgba(12,12,20,0.85); padding: 5px 12px; border-radius: 8px; font-size: 0.73rem; color: #3a3a4a; }
+        .meta-tag strong { color: #7777a0; }
+
+        .result-card {
+            background: rgba(10,10,18,0.9); border: 1px solid #151520;
+            border-radius: 20px; padding: 30px; display: none;
+            backdrop-filter: blur(12px);
+        }
+        .result-card.show { display: block; animation: fadeUp 0.4s ease; }
+
+        .result-top {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 18px; flex-wrap: wrap; gap: 8px;
+        }
+        .result-label { font-size: 0.88rem; font-weight: 600; color: #818cf8; }
+        .copy-btn {
+            padding: 7px 18px; border: 1px solid #1a1a26; border-radius: 10px;
+            background: transparent; color: #44445a; font-size: 0.78rem;
+            cursor: pointer; transition: all 0.2s;
+        }
+        .copy-btn:hover { border-color: #6366f1; color: #818cf8; background: rgba(99,102,241,0.06); box-shadow: 0 0 16px rgba(99,102,241,0.15); }
+
+        .source-url {
+            display: inline-block; padding: 5px 14px;
+            background: rgba(99,102,241,0.05); border: 1px solid rgba(99,102,241,0.1);
+            border-radius: 8px; font-size: 0.73rem; color: #818cf8;
+            margin-bottom: 18px; word-break: break-all; max-width: 100%;
+        }
+
+        .summary-text {
+            line-height: 2; color: #a0a0c0; font-size: 0.92rem;
+            white-space: pre-wrap; word-wrap: break-word;
+        }
+
+        /* ── 特性卡片 ── */
+        .features {
+            max-width: 680px; margin: 72px auto 0; padding: 0 20px 80px;
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+        }
+        .feature-card {
+            background: rgba(10,10,18,0.7); border: 1px solid #12121c;
+            border-radius: 16px; padding: 24px 20px;
+            transition: all 0.35s; position: relative; overflow: hidden;
+        }
+        .feature-card::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(99,102,241,0.2), transparent);
+            opacity: 0; transition: opacity 0.3s;
+        }
+        .feature-card:hover { border-color: #1e1e2e; transform: translateY(-3px); box-shadow: 0 8px 32px rgba(99,102,241,0.1); }
+        .feature-card:hover::before { opacity: 1; }
+        .feature-icon {
+            width: 38px; height: 38px; border-radius: 10px;
+            background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.1);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; margin-bottom: 16px;
+        }
+        .feature-card h3 { font-size: 0.84rem; font-weight: 600; color: #b0b0d0; margin-bottom: 6px; }
+        .feature-card p { font-size: 0.74rem; color: #3a3a4a; line-height: 1.6; }
+
+        /* ── 底部 ── */
+        .footer {
+            text-align: center; padding: 36px 20px;
+            font-size: 0.72rem; color: #1a1a26;
+            border-top: 1px solid #0a0a10;
+        }
+
+        /* ── 扫描线效果 ── */
+        .scanline {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(99,102,241,0.01) 2px,
+                rgba(99,102,241,0.01) 4px
+            );
+        }
+
+        @media (max-width: 600px) {
+            .hero h1 { font-size: 2.2rem; }
+            .hero p { font-size: 0.9rem; }
+            .features { grid-template-columns: 1fr; }
+            .search-box input { padding-right: 130px; }
+            .search-box button { padding: 0 20px; font-size: 0.82rem; }
+        }
+    </style>
+</head>
+<body>
+    <!-- 粒子画布 -->
+    <canvas id="particleCanvas"></canvas>
+
+    <!-- 背景元素 -->
+    <div class="grid-bg"></div>
+    <div class="glow-1"></div>
+    <div class="glow-2"></div>
+    <div class="scanline"></div>
+
+    <div class="main">
+        <nav class="navbar">
+            <div class="nav-brand">
+                <div class="nav-icon">⚡</div>
+                网页摘要助手
+            </div>
+            <div style="display: flex; align-items: center; gap: 20px;">
+                <div class="nav-links" style="display: flex; gap: 16px;">
+                    <a href="/" class="nav-link active" style="color: #818cf8; text-decoration: none; font-size: 0.82rem;">首页</a>
+                    <a href="/settings" class="nav-link" style="color: #44445a; text-decoration: none; font-size: 0.82rem; transition: color 0.3s;">模型设置</a>
+                </div>
+                <div class="nav-status" id="navStatus">
+                    <div class="dot"></div>
+                    <span>服务运行中</span>
+                </div>
+            </div>
+        </nav>
+
+        <section class="hero">
+            <div class="hero-badge"><div class="pulse"></div> 本地运行 · 隐私安全</div>
+            <h1>
+                <span class="line1">粘贴链接</span><br>
+                <span class="line2">获取摘要</span>
+            </h1>
+            <p>输入任意网页地址，自动抓取内容并生成结构化中文摘要</p>
+        </section>
+
+        <section class="search-section">
+            <div class="search-box">
+                <input type="text" id="urlInput" placeholder="粘贴网页链接 ..." autocomplete="off">
+                <button id="summarizeBtn" onclick="summarize()">生成摘要</button>
+            </div>
+        </section>
+
+        <div class="site-tags">
+            <div class="site-tag"><span class="emoji">🐱</span>GitHub</div>
+            <div class="site-tag"><span class="emoji">📝</span>CSDN</div>
+            <div class="site-tag"><span class="emoji">💡</span>知乎</div>
+            <div class="site-tag"><span class="emoji">💎</span>掘金</div>
+            <div class="site-tag"><span class="emoji">📮</span>博客园</div>
+            <div class="site-tag"><span class="emoji">🌐</span>任意网页</div>
+        </div>
+
+        <div class="content-area">
+            <div class="error-msg" id="errorMsg"></div>
+
+            <div class="progress-card" id="progressCard">
+                <div class="progress-header">
+                    <div class="pulse-dot" id="pulseDot"></div>
+                    <span id="progressTitle">正在解析链接...</span>
+                </div>
+                <div class="steps">
+                    <div class="step" id="step-parse">
+                        <div class="step-num">1</div>
+                        <span>解析链接</span>
+                        <span class="step-time" id="time-parse"></span>
+                    </div>
+                    <div class="step" id="step-fetch">
+                        <div class="step-num">2</div>
+                        <span>抓取内容</span>
+                        <span class="step-time" id="time-fetch"></span>
+                    </div>
+                    <div class="step" id="step-summarize">
+                        <div class="step-num">3</div>
+                        <span>生成摘要</span>
+                        <span class="step-time" id="time-summarize"></span>
+                    </div>
+                </div>
+                <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+                <div class="meta-tags" id="metaTags">
+                    <div class="meta-tag">通道: <strong id="tagChannel">-</strong></div>
+                    <div class="meta-tag">长度: <strong id="tagLength">-</strong></div>
+                    <div class="meta-tag">耗时: <strong id="tagElapsed">-</strong></div>
+                </div>
+            </div>
+
+            <div class="result-card" id="resultCard">
+                <div class="result-top">
+                    <span class="result-label">📋 摘要结果</span>
+                    <button class="copy-btn" onclick="copyResult()">复制</button>
+                </div>
+                <div class="source-url" id="sourceUrl"></div>
+                <div class="summary-text" id="summaryText"></div>
+            </div>
+        </div>
+
+        <div class="features">
+            <div class="feature-card">
+                <div class="feature-icon">🔒</div>
+                <h3>本地运行</h3>
+                <p>数据不经过第三方，所有处理在本地完成</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">⚡</div>
+                <h3>流式输出</h3>
+                <p>实时展示生成过程，逐字返回</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🎯</div>
+                <h3>多站适配</h3>
+                <p>针对主流技术站点优化抓取策略</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📦</div>
+                <h3>智能缓存</h3>
+                <p>相同链接 1 小时内秒级返回</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🔄</div>
+                <h3>多通道抓取</h3>
+                <p>并行请求，自动选择最佳数据源</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📋</div>
+                <h3>一键复制</h3>
+                <p>摘要生成后直接复制使用</p>
+            </div>
+        </div>
+
+        <footer class="footer">网页摘要助手 · Ollama 驱动 · 本地部署</footer>
+    </div>
+
+<script>
+// ════════ 粒子系统（带鼠标拖拽效果）════════
+const canvas = document.getElementById('particleCanvas');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// 鼠标状态
+const mouse = {
+    x: null,
+    y: null,
+    radius: 150,
+    speed: 0,
+    prevX: null,
+    prevY: null,
+    velX: 0,
+    velY: 0
+};
+
+document.addEventListener('mousemove', (e) => {
+    mouse.prevX = mouse.x;
+    mouse.prevY = mouse.y;
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+
+    if (mouse.prevX !== null) {
+        mouse.velX = mouse.x - mouse.prevX;
+        mouse.velY = mouse.y - mouse.prevY;
+        mouse.speed = Math.sqrt(mouse.velX * mouse.velX + mouse.velY * mouse.velY);
+    }
+});
+
+document.addEventListener('mouseleave', () => {
+    mouse.x = null;
+    mouse.y = null;
+});
+
+// 粒子类
+class Particle {
+    constructor() {
+        this.reset();
+    }
+
+    reset() {
+        this.x = Math.random() * W;
+        this.y = Math.random() * H;
+        this.baseX = this.x;
+        this.baseY = this.y;
+        this.size = Math.random() * 2 + 1;
+        this.baseSize = this.size;
+        this.vx = (Math.random() - 0.5) * 0.5;
+        this.vy = (Math.random() - 0.5) * 0.5;
+        this.alpha = Math.random() * 0.6 + 0.2;
+        this.baseAlpha = this.alpha;
+
+        // 拖拽相关
+        this.isDragging = false;
+        this.springFactor = 0.03 + Math.random() * 0.02;
+        this.friction = 0.95;
+
+        // 轨迹
+        this.trail = [];
+        this.maxTrail = 15;
+
+        // 发光
+        this.glowAlpha = 0;
+    }
+
+    update() {
+        // 鼠标交互
+        if (mouse.x !== null) {
+            const dx = mouse.x - this.x;
+            const dy = mouse.y - this.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < mouse.radius) {
+                // 在影响范围内
+                const force = (1 - dist / mouse.radius);
+
+                // 普通吸引效果
+                this.vx += dx * force * 0.002;
+                this.vy += dy * force * 0.002;
+
+                // 鼠标移动时的拖拽力
+                if (mouse.speed > 2) {
+                    this.vx += mouse.velX * force * 0.1;
+                    this.vy += mouse.velY * force * 0.1;
+                    this.isDragging = true;
+                    this.glowAlpha = Math.min(1, this.glowAlpha + 0.1);
+                } else {
+                    this.isDragging = false;
+                }
+
+                // 增加亮度和大小
+                this.alpha = this.baseAlpha + force * 0.4;
+                this.size = this.baseSize + force * 2;
+
+                // 记录轨迹
+                if (mouse.speed > 1) {
+                    this.trail.push({
+                        x: this.x,
+                        y: this.y,
+                        alpha: this.alpha * 0.5,
+                        size: this.size * 0.8
+                    });
+                    if (this.trail.length > this.maxTrail) {
+                        this.trail.shift();
+                    }
+                }
+            } else {
+                // 范围外
+                this.isDragging = false;
+                this.alpha = this.baseAlpha;
+                this.size = this.baseSize;
+                this.glowAlpha *= 0.95;
+            }
+        } else {
+            this.isDragging = false;
+            this.alpha = this.baseAlpha;
+            this.size = this.baseSize;
+            this.glowAlpha *= 0.95;
+        }
+
+        // 更新轨迹
+        for (let i = this.trail.length - 1; i >= 0; i--) {
+            this.trail[i].alpha *= 0.88;
+            if (this.trail[i].alpha < 0.01) {
+                this.trail.splice(i, 1);
+            }
+        }
+
+        // 回弹到原位
+        if (!this.isDragging && !mouse.x) {
+            this.vx += (this.baseX - this.x) * this.springFactor;
+            this.vy += (this.baseY - this.y) * this.springFactor;
+        }
+
+        // 物理更新
+        this.vx *= this.friction;
+        this.vy *= this.friction;
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // 边界处理
+        if (this.x < 0) { this.x = 0; this.vx *= -0.5; }
+        if (this.x > W) { this.x = W; this.vx *= -0.5; }
+        if (this.y < 0) { this.y = 0; this.vy *= -0.5; }
+        if (this.y > H) { this.y = H; this.vy *= -0.5; }
+    }
+
+    draw() {
+        // 绘制轨迹
+        for (let i = 0; i < this.trail.length; i++) {
+            const t = this.trail[i];
+            ctx.beginPath();
+            ctx.arc(t.x, t.y, t.size, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(139, 92, 246, ${t.alpha})`;
+            ctx.fill();
+        }
+
+        // 绘制发光
+        if (this.glowAlpha > 0.01) {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size * 4, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(129, 140, 248, ${this.glowAlpha * 0.15})`;
+            ctx.fill();
+        }
+
+        // 绘制粒子
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(129, 140, 248, ${this.alpha})`;
+        ctx.fill();
+    }
+}
+
+// 创建粒子
+const particles = [];
+const PARTICLE_COUNT = Math.min(120, Math.floor(W * H / 8000));
+for (let i = 0; i < PARTICLE_COUNT; i++) {
+    particles.push(new Particle());
+}
+
+// 绘制连线
+function drawConnections() {
+    for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+            const dx = particles[i].x - particles[j].x;
+            const dy = particles[i].y - particles[j].y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            // 拖拽中的粒子连线距离更远
+            const maxDist = (particles[i].isDragging || particles[j].isDragging) ? 200 : 120;
+
+            if (dist < maxDist) {
+                const alpha = (1 - dist / maxDist) * 0.15;
+                ctx.beginPath();
+                ctx.moveTo(particles[i].x, particles[i].y);
+                ctx.lineTo(particles[j].x, particles[j].y);
+                ctx.strokeStyle = `rgba(99, 102, 241, ${alpha})`;
+                ctx.lineWidth = 0.5;
+                ctx.stroke();
+            }
+        }
+    }
+
+    // 鼠标与粒子的连线
+    if (mouse.x !== null) {
+        particles.forEach(p => {
+            const dx = mouse.x - p.x;
+            const dy = mouse.y - p.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < mouse.radius) {
+                const alpha = (1 - dist / mouse.radius) * 0.3;
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(mouse.x, mouse.y);
+                ctx.strokeStyle = `rgba(139, 92, 246, ${alpha})`;
+                ctx.lineWidth = 0.8;
+                ctx.stroke();
+            }
+        });
+    }
+}
+
+// 动画循环
+function animate() {
+    ctx.clearRect(0, 0, W, H);
+
+    // 更新和绘制粒子
+    particles.forEach(p => {
+        p.update();
+        p.draw();
+    });
+
+    // 绘制连线
+    drawConnections();
+
+    requestAnimationFrame(animate);
+}
+animate();
+
+// ════════ 应用逻辑 ════════
+const API = "http://127.0.0.1:5001";
+const $ = id => document.getElementById(id);
+const urlInput=$('urlInput'), btn=$('summarizeBtn'), errorMsg=$('errorMsg');
+const progressCard=$('progressCard'), progressFill=$('progressFill'), progressTitle=$('progressTitle');
+const pulseDot=$('pulseDot'), metaTags=$('metaTags');
+const resultCard=$('resultCard'), summaryText=$('summaryText'), sourceUrl=$('sourceUrl');
+let abortCtrl = null;
+
+fetch(API+"/",{method:"GET",mode:"no-cors"}).then(()=>{
+    $('navStatus').innerHTML='<div class="dot"></div><span>服务运行中</span>';
+}).catch(()=>{
+    $('navStatus').innerHTML='<div class="dot" style="background:#ef4444;box-shadow:0 0 8px rgba(239,68,68,0.5)"></div><span>服务未连接</span>';
+});
+
+urlInput.addEventListener('keydown',e=>{if(e.key==='Enter')summarize();});
+
+function resetUI(){
+    ['parse','fetch','summarize'].forEach(s=>{
+        const el=$('step-'+s); el.classList.remove('active','done');
+        $('time-'+s).textContent='';
+    });
+    progressFill.style.width='0%'; metaTags.style.display='none';
+    summaryText.textContent=''; resultCard.classList.remove('show');
+    errorMsg.classList.remove('show');
+}
+function setStep(name,state,elapsed){
+    const el=$('step-'+name); el.classList.remove('active','done');
+    if(state)el.classList.add(state);
+    if(elapsed!=null)$('time-'+name).textContent=elapsed+'s';
+}
+
+async function summarize(){
+    const url=urlInput.value.trim();
+    if(!url)return showError('请输入链接');
+    if(!/^https?:\/\//.test(url))return showError('请输入 http:// 或 https:// 开头的链接');
+    hideError(); resetUI();
+    btn.disabled=true; btn.textContent='生成中...';
+    progressCard.classList.add('show'); pulseDot.style.display='';
+    progressTitle.textContent='正在解析链接...';
+    if(abortCtrl)abortCtrl.abort();
+    abortCtrl=new AbortController();
+    try{
+        const resp=await fetch(API+"/api/summarize/stream",{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url}),signal:abortCtrl.signal});
+        const reader=resp.body.getReader(), decoder=new TextDecoder();
+        let buf='';
+        while(true){
+            const{done,value}=await reader.read(); if(done)break;
+            buf+=decoder.decode(value,{stream:true});
+            const msgs=buf.split('\n\n'); buf=msgs.pop();
+            msgs.forEach(m=>handleSSE(m.trim()));
+        }
+    }catch(err){if(err.name!=='AbortError')showError(err.message);}
+    finally{btn.disabled=false; btn.textContent='生成摘要'; pulseDot.style.display='none';}
+}
+function handleSSE(raw){
+    if(!raw)return;
+    const ev=raw.match(/^event:\s*(\w+)/m), dt=raw.match(/^data:\s*(.+)$/m);
+    if(!ev||!dt)return;
+    let data; try{data=JSON.parse(dt[1]);}catch{return;}
+    const type=ev[1];
+    if(type==='stage'){
+        const{stage,message,elapsed}=data;
+        if(stage==='parse'){setStep('parse','active');progressTitle.textContent=message;}
+        else if(stage==='fetch_start'){setStep('parse','done',elapsed);setStep('fetch','active');progressTitle.textContent=message;progressFill.style.width='30%';}
+        else if(stage==='fetch_done'){setStep('fetch','done',elapsed);setStep('summarize','active');progressTitle.textContent='正在生成摘要...';progressFill.style.width='55%';showMeta(data.channel,data.content_length);}
+        else if(stage==='cached'){setStep('parse','done',elapsed);setStep('fetch','done',elapsed);setStep('summarize','active');progressTitle.textContent=message;progressFill.style.width='55%';}
+    }else if(type==='token'){
+        summaryText.textContent+=data.token;
+        if(!resultCard.classList.contains('show'))resultCard.classList.add('show');
+    }else if(type==='done'){
+        setStep('summarize','done',data.elapsed);progressTitle.textContent='✅ 完成';
+        progressFill.style.width='100%';sourceUrl.textContent=data.url;
+        showMeta(data.channel,data.content_length,data.elapsed,data.cached);
+    }else if(type==='error'){showError(data.message||'生成失败');}
+}
+function showMeta(ch,len,el,ca){
+    metaTags.style.display='flex';
+    $('tagChannel').textContent=ca?'缓存':(ch||'-');
+    $('tagLength').textContent=(len||0)+' 字符';
+    if(el!=null)$('tagElapsed').textContent=el+'s';
+}
+function copyResult(){
+    navigator.clipboard.writeText(summaryText.textContent).then(()=>{
+        const b=document.querySelector('.copy-btn');b.textContent='✓ 已复制';
+        setTimeout(()=>b.textContent='复制',2000);
+    });
+}
+function showError(msg){errorMsg.textContent=msg;errorMsg.classList.add('show');}
+function hideError(){errorMsg.classList.remove('show');}
+</script>
+</body>
+</html>
