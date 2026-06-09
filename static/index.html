@@ -425,10 +425,14 @@
             <div class="result-card" id="resultCard">
                 <div class="result-top">
                     <span class="result-label">📋 摘要结果</span>
-                    <button class="copy-btn" onclick="copyResult()">复制</button>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="copy-btn" onclick="exportToObsidian()" id="obsidianBtn" style="background: rgba(139, 92, 246, 0.2); border-color: rgba(139, 92, 246, 0.4); color: #c084fc;">📚 导出到 Obsidian</button>
+                        <button class="copy-btn" onclick="copyResult()">复制</button>
+                    </div>
                 </div>
                 <div class="source-url" id="sourceUrl"></div>
                 <div class="summary-text" id="summaryText"></div>
+                <div id="obsidianStatus" style="margin-top: 12px; font-size: 0.78rem; color: #818cf8; display: none;"></div>
             </div>
         </div>
 
@@ -791,6 +795,8 @@ function handleSSE(raw){
         setStep('summarize','done',data.elapsed);progressTitle.textContent='✅ 完成';
         progressFill.style.width='100%';sourceUrl.textContent=data.url;
         showMeta(data.channel,data.content_length,data.elapsed,data.cached);
+        // 保存摘要信息用于 Obsidian 导出
+        saveCurrentSummary(data.url, summaryText.textContent, data.model || 'unknown');
     }else if(type==='error'){showError(data.message||'生成失败');}
 }
 function showMeta(ch,len,el,ca){
@@ -805,6 +811,78 @@ function copyResult(){
         setTimeout(()=>b.textContent='复制',2000);
     });
 }
+
+// ════════ Obsidian 导出功能 ═══════
+let currentSummaryUrl = '';
+let currentSummaryText = '';
+let currentSummaryModel = '';
+
+// 保存当前摘要信息
+function saveCurrentSummary(url, text, model) {
+    currentSummaryUrl = url;
+    currentSummaryText = text;
+    currentSummaryModel = model;
+}
+
+async function exportToObsidian() {
+    const btn = document.getElementById('obsidianBtn');
+    const status = document.getElementById('obsidianStatus');
+
+    if (!currentSummaryText) {
+        status.textContent = '❌ 没有可导出的摘要';
+        status.style.display = 'block';
+        status.style.color = '#f87171';
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '⏳ 导出中...';
+    status.style.display = 'block';
+    status.style.color = '#818cf8';
+    status.textContent = '正在导出到 Obsidian...';
+
+    try {
+        // 从 URL 提取标题
+        let title = '未命名摘要';
+        try {
+            const urlObj = new URL(currentSummaryUrl);
+            title = urlObj.hostname + urlObj.pathname.split('/').filter(Boolean).join('-');
+        } catch (e) {
+            title = currentSummaryUrl.substring(0, 50);
+        }
+
+        const resp = await fetch('/api/obsidian/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: title,
+                url: currentSummaryUrl,
+                summary: currentSummaryText,
+                model: currentSummaryModel
+            })
+        });
+
+        const data = await resp.json();
+
+        if (data.success) {
+            status.style.color = '#22c55e';
+            status.innerHTML = `✅ 已导出到 Obsidian<br>📂 分类: ${data.category}<br>🏷️ 标签: ${data.tags.join(', ')}`;
+            btn.textContent = '✓ 已导出';
+            setTimeout(() => {
+                btn.textContent = '📚 导出到 Obsidian';
+                btn.disabled = false;
+            }, 3000);
+        } else {
+            throw new Error(data.error || '导出失败');
+        }
+    } catch (err) {
+        status.style.color = '#f87171';
+        status.textContent = `❌ 导出失败: ${err.message}`;
+        btn.textContent = '📚 导出到 Obsidian';
+        btn.disabled = false;
+    }
+}
+
 function showError(msg){errorMsg.textContent=msg;errorMsg.classList.add('show');}
 function hideError(){errorMsg.classList.remove('show');}
 </script>

@@ -757,6 +757,7 @@ def test_model():
 
 @app.route("/api/summarize", methods=["POST"])
 def summarize():
+    global _current_model_key
     data = request.get_json(silent=True) or {}
     url = (data.get("url") or "").strip()
 
@@ -798,7 +799,6 @@ def summarize():
                 print(f"🔄 自动降级到备用模型: {PRESET_MODELS[fallback_key]['name']}")
 
                 # 临时切换到备用模型
-                global _current_model_key
                 old_model = _current_model_key
                 _current_model_key = fallback_key
 
@@ -974,6 +974,138 @@ def summarize_stream():
     return Response(event_stream(), mimetype="text/event-stream")
 
 
+# =================== Obsidian 集成 ====================
+
+# 导入 Obsidian 集成模块
+try:
+    from obsidian_integration import ObsidianIntegration
+    obsidian = ObsidianIntegration()
+    OBSIDIAN_ENABLED = True
+except Exception as e:
+    print(f"⚠️  Obsidian 集成未启用: {e}")
+    OBSIDIAN_ENABLED = False
+
+
+@app.route("/api/obsidian/export", methods=["POST"])
+def export_to_obsidian():
+    """导出摘要到 Obsidian"""
+    if not OBSIDIAN_ENABLED:
+        return jsonify({"error": "Obsidian 集成未启用"}), 500
+
+    data = request.get_json(silent=True) or {}
+    title = data.get("title", "")
+    url = data.get("url", "")
+    summary = data.get("summary", "")
+    model = data.get("model", "unknown")
+    tags = data.get("tags", [])
+
+    if not summary:
+        return jsonify({"error": "摘要内容不能为空"}), 400
+
+    try:
+        result = obsidian.save_summary(title, url, summary, model, tags)
+        return jsonify({
+            "success": True,
+            "message": "已导出到 Obsidian",
+            "path": result["path"],
+            "category": result["category"],
+            "tags": result["tags"]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/obsidian/auto-export", methods=["POST"])
+def auto_export_to_obsidian():
+    """自动导出（摘要完成后自动调用）"""
+    if not OBSIDIAN_ENABLED:
+        return jsonify({"skipped": True, "reason": "Obsidian 未启用"})
+
+    data = request.get_json(silent=True) or {}
+    title = data.get("title", "未命名摘要")
+    url = data.get("url", "")
+    summary = data.get("summary", "")
+    model = data.get("model", "unknown")
+
+    if not summary:
+        return jsonify({"skipped": True, "reason": "摘要为空"})
+
+    try:
+        result = obsidian.save_summary(title, url, summary, model)
+        return jsonify({
+            "success": True,
+            "path": result["path"],
+            "category": result["category"]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/obsidian/mindmap", methods=["GET"])
+def get_mindmap():
+    """获取思维导图数据"""
+    if not OBSIDIAN_ENABLED:
+        return jsonify({"error": "Obsidian 集成未启用"}), 500
+
+    try:
+        days = request.args.get("days", 30, type=int)
+        mindmap_data = obsidian.generate_mindmap(days)
+        markmap_text = obsidian.generate_markmap(days)
+
+        return jsonify({
+            "success": True,
+            "data": mindmap_data,
+            "markmap": markmap_text
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/obsidian/stats", methods=["GET"])
+def get_obsidian_stats():
+    """获取 Obsidian 统计信息"""
+    if not OBSIDIAN_ENABLED:
+        return jsonify({"error": "Obsidian 集成未启用"}), 500
+
+    try:
+        stats = obsidian.get_statistics()
+        return jsonify({
+            "success": True,
+            "stats": stats
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/obsidian/classify", methods=["POST"])
+def classify_content():
+    """AI 自动分类"""
+    if not OBSIDIAN_ENABLED:
+        return jsonify({"error": "Obsidian 集成未启用"}), 500
+
+    data = request.get_json(silent=True) or {}
+    title = data.get("title", "")
+    summary = data.get("summary", "")
+    url = data.get("url", "")
+
+    try:
+        category = obsidian.classify_content(title, summary, url)
+        tags = obsidian.extract_tags(title, summary, url)
+
+        return jsonify({
+            "success": True,
+            "category": category,
+            "tags": tags
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     print_startup_info()
+    if OBSIDIAN_ENABLED:
+        print("📚 Obsidian 集成已启用")
+        print(f"   Vault 路径: {obsidian.vault_path}")
+        print(f"   摘要目录: {obsidian.summaries_path}")
+    print()
     app.run(host="0.0.0.0", port=5001, debug=True, threaded=True)
