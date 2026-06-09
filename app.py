@@ -347,26 +347,39 @@ def channel_raw_readme(repo, branch="main"):
 
 
 def channel_repo_api(repo):
-    try:
-        resp = requests.get(f"https://api.github.com/repos/{repo}", timeout=10)
+    """GitHub API 通道：并行请求 repo 信息和 README，~1s 完成"""
+    def _get_repo_info():
+        resp = requests.get(f"https://api.github.com/repos/{repo}", timeout=5)
         if resp.status_code == 200:
             data = resp.json()
-            parts = [
+            return [
                 f"Name: {data.get('full_name', '')}",
                 f"Description: {data.get('description', '')}",
                 f"Topics: {', '.join(data.get('topics', []))}",
             ]
-            readme_resp = requests.get(
-                f"https://api.github.com/repos/{repo}/readme",
-                timeout=10,
-                headers={"Accept": "application/vnd.github.raw"}
-            )
-            if readme_resp.status_code == 200:
-                parts.append(f"\nREADME:\n{readme_resp.text}")
-            return "\n".join(parts)
+        return []
+
+    def _get_readme():
+        resp = requests.get(
+            f"https://api.github.com/repos/{repo}/readme",
+            timeout=5,
+            headers={"Accept": "application/vnd.github.raw"}
+        )
+        if resp.status_code == 200:
+            return f"\nREADME:\n{resp.text}"
+        return ""
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_info = ex.submit(_get_repo_info)
+            f_readme = ex.submit(_get_readme)
+            parts = f_info.result()
+            readme = f_readme.result()
+            if readme:
+                parts.append(readme)
+        return "\n".join(parts) if parts else None
     except Exception:
-        pass
-    return None
+        return None
 
 
 def channel_raw_blob(url):
@@ -469,17 +482,8 @@ def fetch_github_content(url):
         match = re.search(r'github\.com/([^/]+/[^/]+)/?', url)
         if match:
             repo = match.group(1)
-            # API 通道（最快，~0.6s），包含 repo 信息 + README
+            # API 通道（~1s），包含 repo 信息 + README，完全替代 raw_readme
             channels.append(("repo_api", lambda: channel_repo_api(repo)))
-            # raw README 作为备用（国内可能慢，20s+），但比 html_extract 快
-            branch = "main"
-            try:
-                api_resp = requests.get(f"https://api.github.com/repos/{repo}", timeout=5)
-                if api_resp.status_code == 200:
-                    branch = api_resp.json().get("default_branch", "main")
-            except Exception:
-                pass
-            channels.append(("raw_readme", lambda: channel_raw_readme(repo, branch)))
 
     if not channels:
         content = channel_html_extract(url)
@@ -499,7 +503,7 @@ def fetch_github_content(url):
             except Exception:
                 pass
 
-    priority = ["raw_blob", "issue_api", "pr_api", "repo_api", "raw_readme"]
+    priority = ["raw_blob", "issue_api", "pr_api", "repo_api"]
     for p in priority:
         if p in results:
             return results[p], p
