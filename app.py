@@ -229,7 +229,7 @@ def clean_text(text):
     return "\n".join(lines[:2500])
 
 
-def _make_request_with_session(url, timeout=20):
+def _make_request_with_session(url, timeout=15):
     """使用 Session + 完整浏览器头请求网页，自动处理 cookie 和反爬"""
     session = requests.Session()
     headers = {
@@ -252,19 +252,21 @@ def _make_request_with_session(url, timeout=20):
     parsed = urlparse(url)
     referer = f"{parsed.scheme}://{parsed.netloc}/"
 
-    # 策略1：先访问首页获取 cookie（知乎/CSDN 等需要）
-    try:
-        session.get(referer, headers=headers, timeout=10, allow_redirects=True)
-    except Exception:
-        pass
+    # 仅对需要 cookie 的站点先访问首页（GitHub 等不需要，跳过可节省 10s+）
+    _COOKIE_REQUIRED_HOSTS = {"zhuanlan.zhihu.com", "blog.csdn.net", "juejin.cn", "www.zhihu.com", "mp.weixin.qq.com"}
+    if any(h in parsed.netloc for h in _COOKIE_REQUIRED_HOSTS):
+        try:
+            session.get(referer, headers=headers, timeout=5, allow_redirects=True)
+        except Exception:
+            pass
 
     headers["Referer"] = referer
     headers["Sec-Fetch-Site"] = "same-origin"
 
-    # 策略2：正式请求目标页面
+    # 正式请求目标页面
     resp = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
 
-    # 策略3：如果 403，尝试使用移动端 UA（部分网站对移动端限制更松）
+    # 如果 403，尝试移动端 UA
     if resp.status_code == 403:
         mobile_headers = dict(headers)
         mobile_headers["User-Agent"] = (
@@ -272,8 +274,7 @@ def _make_request_with_session(url, timeout=20):
             "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         )
         mobile_headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        mobile_url = url.replace("zhuanlan.zhihu.com", "zhuanlan.zhihu.com")
-        resp = session.get(mobile_url, headers=mobile_headers, timeout=timeout, allow_redirects=True)
+        resp = session.get(url, headers=mobile_headers, timeout=timeout, allow_redirects=True)
 
     resp.raise_for_status()
     return resp
@@ -444,47 +445,45 @@ def channel_html_extract(url):
 
 
 def fetch_github_content(url):
-    """多通道抓取 GitHub 内容，并行请求，返回 (content, channel_name)"""
+    """多通道抓取 GitHub 内容，并行请求，返回 (content, channel_name)
+    优化：GitHub 页面 HTML 解析极慢且质量差，移除该通道；优先走 API（~1s）
+    """
     channels = []
 
     if "/blob/" in url:
         channels.append(("raw_blob", lambda: channel_raw_blob(url)))
-        channels.append(("html_extract", lambda: channel_html_extract(url)))
 
     elif "/issues/" in url:
         match = re.search(r'github\.com/([^/]+/[^/]+)/issues/(\d+)', url)
         if match:
             repo, issue_num = match.groups()
             channels.append(("issue_api", lambda: channel_issue_api(repo, issue_num)))
-            channels.append(("html_extract", lambda: channel_html_extract(url)))
 
     elif "/pull/" in url:
         match = re.search(r'github\.com/([^/]+/[^/]+)/pull/(\d+)', url)
         if match:
             repo, pr_num = match.groups()
             channels.append(("pr_api", lambda: channel_pr_api(repo, pr_num)))
-            channels.append(("html_extract", lambda: channel_html_extract(url)))
 
     else:
         match = re.search(r'github\.com/([^/]+/[^/]+)/?', url)
         if match:
             repo = match.group(1)
+            # API 通道（最快，~0.6s），包含 repo 信息 + README
+            channels.append(("repo_api", lambda: channel_repo_api(repo)))
+            # raw README 作为备用（国内可能慢，20s+），但比 html_extract 快
             branch = "main"
             try:
-                api_resp = requests.get(
-                    f"https://api.github.com/repos/{repo}", timeout=8
-                )
+                api_resp = requests.get(f"https://api.github.com/repos/{repo}", timeout=5)
                 if api_resp.status_code == 200:
                     branch = api_resp.json().get("default_branch", "main")
             except Exception:
                 pass
             channels.append(("raw_readme", lambda: channel_raw_readme(repo, branch)))
-            channels.append(("repo_api", lambda: channel_repo_api(repo)))
-            channels.append(("html_extract", lambda: channel_html_extract(url)))
 
     if not channels:
-        result = channel_html_extract(url)
-        return (result, "html_extract") if result else (None, None)
+        content = channel_html_extract(url)
+        return (content, "html_extract") if content else (None, None)
 
     results = {}
     with ThreadPoolExecutor(max_workers=len(channels)) as executor:
@@ -500,12 +499,12 @@ def fetch_github_content(url):
             except Exception:
                 pass
 
-    priority = ["raw_blob", "raw_readme", "issue_api", "pr_api", "repo_api", "html_extract"]
+    priority = ["raw_blob", "issue_api", "pr_api", "repo_api", "raw_readme"]
     for p in priority:
         if p in results:
             return results[p], p
 
-    return results.get("html_extract"), "html_extract"
+    return None, None
 
 
 # =================== 统一内容入口 ====================
@@ -520,19 +519,19 @@ def fetch_content(url):
 
 
 def build_prompt(text):
-    truncated = text[:15000] if len(text) > 15000 else text
-    return f"""请阅读以下内容，并生成一份**详细、结构化**的中文摘要。
+    truncated = text[:8000] if len(text) > 8000 else text
+    return f"""请阅读以下内容，生成一份简洁的中文摘要。
 要求：
-1. 提炼核心观点、关键论据和重要结论
-2. 如果涉及技术内容，说明主要技术方案和实现思路
-3. 条理清晰，分点或分段输出
-4. 长度不少于 300 字，尽可能详尽
+1. 提炼核心观点和关键结论
+2. 技术内容说明主要方案
+3. 条理清晰，分点输出
+4. 300-500字
 
-内容如下：
+内容：
 
 {truncated}
 
-详细摘要（中文）："""
+摘要："""
 
 
 def summarize_with_openai_stream(text):
@@ -549,8 +548,8 @@ def summarize_with_openai_stream(text):
                 {"role": "user", "content": prompt}
             ],
             stream=True,
-            temperature=0.3,
-            max_tokens=2000
+            temperature=0.2,
+            max_tokens=1500
         )
 
         for chunk in stream:
@@ -579,8 +578,8 @@ def summarize_with_openai(text):
                 {"role": "user", "content": prompt}
             ],
             stream=False,
-            temperature=0.3,
-            max_tokens=2000
+            temperature=0.2,
+            max_tokens=1500
         )
 
         return response.choices[0].message.content.strip()
@@ -598,8 +597,8 @@ def summarize_with_ollama_stream(text):
         "prompt": prompt,
         "stream": True,
         "options": {
-            "temperature": 0.3,
-            "num_predict": 2000
+            "temperature": 0.2,
+            "num_predict": 1500
         }
     }
     resp = requests.post(OLLAMA_URL, json=payload, stream=True, timeout=180)
@@ -625,8 +624,8 @@ def summarize_with_ollama(text):
         "prompt": prompt,
         "stream": False,
         "options": {
-            "temperature": 0.3,
-            "num_predict": 2000
+            "temperature": 0.2,
+            "num_predict": 1500
         }
     }
     resp = requests.post(OLLAMA_URL, json=payload, timeout=180)
